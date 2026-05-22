@@ -161,6 +161,175 @@ Com o arquivo criado, abra o seu terminal na raiz do projeto e execute:
 uv sync
 ```
 Este comando criará o ambiente virtual isolado local (`.venv`) e instalará todas as dependências de produção e de testes de forma instantânea.
+---
+
+## 🛠️ 3.1. Ignorando Arquivos Desnecessários (`.gitignore`)
+
+Para garantir que a nossa suite de desenvolvimento limpa e profissional no Git permaneça, arquivos gerados localmente e dados temporários versionados ser não devem! 
+
+Crie o arquivo [.gitignore](file:///.gitignore) na raiz do seu projeto contendo a especificação abaixo:
+
+```gitignore
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtualenv
+.venv/
+venv/
+
+# Environment
+.env
+.envrc
+
+# uv
+.python-version
+
+# Ruff
+.ruff_cache/
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# RabbitMQ data
+mnesia/
+rabbitmq/
+rabbitmq-data/
+*.rdb
+*.aof
+*.pid
+
+# IDE
+.idea/
+.vscode/
+
+# Databases / local state
+*.db
+*.sqlite3
+```
+
+---
+
+## 🛠️ 3.2. Script de Diagnóstico do Broker (`scripts/rmq_status.py`)
+
+No nosso `pyproject.toml`, uma tarefa rápida de diagnóstico configurada nós deixamos: `rmq-status`. Esse script utiliza a biblioteca `rich` para formatar e renderizar em belíssimas tabelas na IDE o estado das filas, exchanges e bindings do RabbitMQ Broker local, consultando a sua API REST integrada.
+
+Crie a pasta `scripts/` se ainda não a criou, e dentro dela crie o arquivo [scripts/rmq_status.py](file:///scripts/rmq_status.py):
+
+```python
+#!/usr/bin/env python3
+"""Exibe um resumo consolidado do estado do broker RabbitMQ."""
+import json
+import sys
+import urllib.error
+import urllib.request
+from base64 import b64encode
+from typing import Any
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+BASE_URL = "http://localhost:15672/api"
+_AUTH_HEADER = {"Authorization": "Basic " + b64encode(b"guest:guest").decode()}
+
+console = Console()
+
+
+def fetch(path: str) -> Any:
+    req = urllib.request.Request(f"{BASE_URL}{path}", headers=_AUTH_HEADER)
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read())
+
+
+def build_queues_table(queues: list[dict[str, Any]]) -> Table:
+    table = Table(show_header=True, header_style="bold cyan", expand=True)
+    table.add_column("Fila", style="bold")
+    table.add_column("Ready", justify="right")
+    table.add_column("Unacked", justify="right")
+    table.add_column("Total", justify="right")
+    table.add_column("Cons.", justify="right")
+    table.add_column("Pub.", justify="right")
+    table.add_column("Entregues", justify="right")
+    table.add_column("ACK", justify="right")
+    table.add_column("NACK", justify="right")
+    table.add_column("Estado")
+
+    for q in queues:
+        stats: dict[str, Any] = q.get("message_stats", {})
+        state = q.get("state", "-")
+        state_display = f"[green]{state}[/green]" if state == "running" else f"[red]{state}[/red]"
+        table.add_row(
+            q["name"],
+            str(q.get("messages_ready", 0)),
+            str(q.get("messages_unacknowledged", 0)),
+            str(q.get("messages", 0)),
+            str(q.get("consumers", 0)),
+            str(stats.get("publish", 0)),
+            str(stats.get("deliver", 0)),
+            str(stats.get("ack", 0)),
+            str(stats.get("redeliver", 0)),
+            state_display,
+        )
+    return table
+
+
+def build_exchanges_table(exchanges: list[dict[str, Any]]) -> Table:
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Exchange", style="bold")
+    table.add_column("Tipo")
+    table.add_column("Durável", justify="center")
+
+    for e in exchanges:
+        if e["name"]:
+            table.add_row(
+                e["name"],
+                e["type"],
+                "[green]✓[/green]" if e["durable"] else "[red]✗[/red]",
+            )
+    return table
+
+
+def build_bindings_table(bindings: list[dict[str, Any]]) -> Table:
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Source")
+    table.add_column("Routing Key", style="yellow")
+    table.add_column("Destination")
+
+    for b in bindings:
+        table.add_row(b["source"], b["routing_key"], b["destination"])
+    return table
+
+
+def main() -> None:
+    try:
+        queues: list[dict[str, Any]] = fetch("/queues")
+        exchanges: list[dict[str, Any]] = fetch("/exchanges")
+        bindings: list[dict[str, Any]] = fetch(
+            "/bindings/%2F/e/pedidos_exchange/q/pedidos_queue"
+        )
+    except urllib.error.URLError as exc:
+        console.print(f"[red]Erro ao conectar ao RabbitMQ Management:[/red] {exc.reason}")
+        console.print("Verifique se os containers estão rodando: [bold]docker compose ps[/bold]")
+        sys.exit(1)
+
+    console.print(Panel(build_queues_table(queues), title="[bold]Filas[/bold]"))
+    console.print(Panel(build_exchanges_table(exchanges), title="[bold]Exchanges[/bold]"))
+    console.print(
+        Panel(
+            build_bindings_table(bindings) if bindings else "[yellow]Nenhum binding encontrado[/yellow]",
+            title="[bold]Bindings — pedidos_exchange → pedidos_queue[/bold]",
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()
+```
 
 ---
 
@@ -200,6 +369,11 @@ docker compose up -d rabbitmq
 1. **Monitore o Healthcheck**: Execute o comando `docker ps` e verifique se o container `rabbitmq-broker` exibe o status `(healthy)` após alguns segundos.
 2. **Acesse o Management Console**: Abra o seu navegador e acesse [http://localhost:15672](http://localhost:15672).
 3. **Faça o Login**: Utilize o usuário padrão `guest` e a senha `guest`.
+4. **Execute a tarefa de status**: Execute a tarefa do taskipy no terminal para ver os detalhes formatados pela API de gerenciamento:
+   ```bash
+   uv run task rmq-status
+   ```
+   *(Nota: Como no início o nosso ecossistema de código ainda não rodou, os bindings específicos de pedidos vazios estarão; mas comprovar que o script executa com sucesso você poderá!)*
 
 ---
 
@@ -207,11 +381,11 @@ docker compose up -d rabbitmq
 
 Prontos o seu ambiente e o broker estar devem, jovem Padawan! Instalar os pré-requisitos e criar a estrutura inicial com precisão você precisa, sim! 
 
-Para mim, o seu progresso mostrar agora você deve. O seu arquivo `pyproject.toml` na raiz, a árvore de diretórios criada e o status de `healthy` do container no terminal apresentar você precisa!
+Para mim, o seu progresso mostrar agora você deve. O seu arquivo `pyproject.toml`, o seu `.gitignore`, o seu `scripts/rmq_status.py` criado e a execução bem-sucedida de `uv run task rmq-status` no terminal demonstrar você deve!
 
 > [!IMPORTANT]
 > **Fluxo de Aprovação e Aprendizado**:
-> Primeiro, o seu workspace físico e o container rodando localmente eu irei verificar.
+> Primeiro, o seu workspace físico com o `.gitignore` e a saída limpa de `rmq-status` eu irei avaliar.
 > Após eu atestar que tudo correto está e o setup físico funcional se encontra, a você eu apresentarei perguntas reflexivas sobre a importância do Healthcheck no broker de mensageria e o papel do gerenciador `uv` no isolamento do ambiente virtual.
 > 
 > Responder às perguntas você deve para a sua compreensão demonstrar! Apenas após a sua resposta correta, a permissão para avançarmos ao **Passo 3/6: API Produtora FastAPI** concedida será! Que a Força com você esteja!
