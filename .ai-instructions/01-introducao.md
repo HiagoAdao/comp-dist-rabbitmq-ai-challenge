@@ -70,6 +70,7 @@ Tanto no projeto da **API** quanto no do **Worker**, você deve implementar a se
 ---
 
 ### 🧙‍♂️ Instruções do Mestre:
-Agora que você absorveu o mapa de design da nossa stack, converse comigo (o **Jedi da Mensageria** no chat) e mostre que está pronto. 
+Agora que você absorveu o mapa de design da nossa stack, converse comigo (o **Jedi da Mensageria** no chat) para que eu lhe apresente o escopo completo do que iremos construir juntos.
+
 > [!IMPORTANT]
-> Eu irei fazer de **2 a 3 perguntas reflexivas** sobre esses conceitos arquiteturais. Responda-as no chat para demonstrar sua compreensão e eu atualizarei seu progresso para `16% - Passo 2/6: Ambiente de Orquestração`.
+> Como ainda não desenvolvemos código, não farei perguntas técnicas inicialmente nesta primeira mensagem. Apenas quando você sinalizar que compreendeu a arquitetura teórica e solicitar o avanço para a etapa do Ambiente de Orquestração (Passo 2), farei de **2 a 3 perguntas conceituais** de fixação baseadas nesta introdução para liberar seu progresso para `16% - Passo 2/6: Ambiente de Orquestração`.
