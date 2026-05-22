@@ -13,7 +13,7 @@ Este repositório foi montado como uma **Jornada de Aprendizado Pedagógica (#an
 A verdadeira "mágica" arquitetural e pedagógica não está solta na raiz, mas sim encapsulada nestes arquivos e diretórios essenciais:
 
 ```text
-rabbitmq-stack-com-ia/
+comp-dist-rabbitmq-ai-challenge/
 ├── AGENTS.md                  # 🧙‍♂️ Orquestrador: Arquivo raiz que converte a IA no "Jedi da Mensageria".
 ├── .ai-instructions/          # 🧠 Cérebro do Jedi: Regras, arquitetura e restrições.
 └── README.md                  # 📖 Este arquivo, contendo as instruções iniciais e de uso.
@@ -37,11 +37,15 @@ Este projeto utiliza o padrão [AGENTS.md](https://agents.md/) para definir e or
 
 ## 🚀 Primeiros passos: Ativando sua imersão
 
-Para dar início ao desenvolvimento, você precisará utilizar uma IDE acoplada a um assistente de IA (ex: Cursor, Cline, Roo Code, etc.) configurada no diretório atual:
+Para dar início ao desenvolvimento, você precisará clonar o repositório e utilizar uma IDE acoplada a um assistente de IA (ex: Cursor, Cline, Roo Code, etc.) configurada no diretório do projeto:
 
-1. **Abra a pasta** `desafio-rabbitmq-stack` na sua IDE de escolha.
-2. **Inicie o Agente de IA** (Chat / Composer).
-3. **Primeira Interação:** Basta enviar um simples "Olá" no chat inicial! O agente fará a leitura autônoma da cadeia de diretivas e arquivos ocultos para se inicializar.
+1. **Clone o repositório** em sua máquina local:
+   ```bash
+   git clone https://github.com/HiagoAdao/comp-dist-rabbitmq-ai-challenge.git
+   ```
+2. **Abra a pasta** `comp-dist-rabbitmq-ai-challenge` na sua IDE de escolha.
+3. **Inicie o Agente de IA** (Chat / Composer).
+4. **Primeira Interação:** Basta enviar um simples "Olá" no chat inicial! O agente fará a leitura autônoma da cadeia de diretivas e arquivos ocultos para se inicializar.
 
 Deste ponto em diante, apenas siga o plano arquitetural do Jedi da Mensageria para codificar o projeto!
 
