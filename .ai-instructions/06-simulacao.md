@@ -244,17 +244,89 @@ Crie o arquivo [README.md](file:///README.md) definitivo do seu projeto na raiz 
    ```
 6. **Métricas e Logs**: Comandos para inspecionar a auditoria de logs no container.
 
+
+---
+
+## 🚀 5. Desafio Extra: Integração Contínua (CI) com GitHub Actions
+
+Na engenharia de software de alta performance, a sua suite de testes deve rodar automaticamente a cada alteração de código! Para consagrar a sua jornada, o seu projeto local para um repositório no **GitHub** você subir deve, e uma pipeline de **Integração Contínua (CI)** com o **GitHub Actions** criar você irá!
+
+O GitHub Actions executará os linters e rodará a suite de testes a cada Push ou Pull Request enviado para o branch principal, garantindo a integridade contínua do seu ecossistema.
+
+### 📝 Criando o Workflow da Pipeline (`.github/workflows/ci.yml`)
+
+Na raiz do seu workspace (`rabbitmq-stack/`), crie a estrutura de pastas `.github/workflows/` se ainda não existir, e crie o arquivo [ci.yml](file:///.github/workflows/ci.yml) contendo a definição ultra-rápida baseada em cache nativo do `uv`:
+
+```yaml
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    name: Run Lint and Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Run Ruff Lint
+        run: uv run task lint
+
+      - name: Run Test Suite with Coverage Validation
+        run: uv run task test-cov
+```
+
+### 🛰️ Subindo o Projeto e Ativando a Pipeline
+
+1. **Inicialize o Git localmente** (se ainda não o fez):
+   ```bash
+   git init
+   git branch -M main
+   git add .
+   git commit -m "feat: implementacao completa do ecossistema rabbitmq-stack"
+   ```
+2. **Crie um repositório no seu GitHub**:
+   * Vá em seu painel do GitHub e crie um novo repositório público ou privado chamado `rabbitmq-stack`.
+3. **Associe e suba o código**:
+   * Siga as instruções do próprio GitHub para parear o repositório remoto:
+     ```bash
+     git remote add origin https://github.com/SEU_USUARIO/rabbitmq-stack.git
+     git push -u origin main
+     ```
+4. **Assista a Magia Acontecer**:
+   * Acesse a aba **Actions** em seu repositório do GitHub. Você verá a pipeline `Continuous Integration` disparar instantaneamente, instalando o Python, ativando o cache do `uv` em milissegundos, rodando os linters e validando a cobertura de testes em menos de 30 segundos!
+
 ---
 
 ## 🧙‍♂️ Instruções do Mestre:
 
 A sua jornada de aprendizado do ecossistema assíncrono concluída com glória está, jovem Padawan! Todo o ecossistema integrado rodando na rede conteinerizada apresentar você precisa, sim!
 
-O seu arquivo `README.md` impecável e as chamadas do lote HTTP com logs de concorrência me provar você deve!
+O seu arquivo `README.md` impecável e as chamadas do lote HTTP com logs de concorrência me provar você deve! E para o seu valor na força verdadeiramente atestar, o seu repositório no GitHub com a pipeline do GitHub Actions verde e brilhando no Actions provar você precisa, sim!
 
 > [!IMPORTANT]
 > **Fluxo de Aprovação Final e Quiz de Maestria**:
-> Primeiro, o ecossistema completo orquestrado e a escala concorrente de workers eu irei avaliar.
+> Primeiro, o ecossistema completo orquestrado, a escala concorrente de workers e a pipeline do GitHub Actions de CI funcionando eu irei avaliar.
 > Após atestarmos a integridade e robustez total da sua entrega prática, a você eu aplicarei o **Quiz de Fixação Final Interativo com 4 perguntas estratégicas** sobre concorrência no SQLite3 e o fluxo do Fair Dispatch.
 > 
 > Com maestria as perguntas responder você deve! Apenas após a sua comprovação teórica, a certificação oficial de conclusão da trilha RabbitMQ Stack outorgada a você será! Que a Força esteja com você nesta consagração final!
