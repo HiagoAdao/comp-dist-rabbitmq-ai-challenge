@@ -2,13 +2,72 @@
 
 Saudações, Padawan! Agora que você dominou os alicerces conceituais e a arquitetura em camadas do nosso sistema, iniciaremos a jornada prática.
 
-Neste passo, nosso objetivo é preparar a estrutura física de diretórios do nosso projeto e subir o **RabbitMQ Broker** em container de forma isolada. Isso garantirá que tenhamos um servidor de mensageria ativo na sua máquina local pronto para aceitar conexões TCP enquanto desenvolvemos a API e o Worker nos próximos passos.
+Neste passo, nosso objetivo é preparar a estrutura física de diretórios do nosso projeto, garantir a instalação dos pré-requisitos do ambiente no seu respectivo Sistema Operacional, e subir o **RabbitMQ Broker** em container de forma isolada. Isso garantirá que tenhamos um servidor de mensageria ativo na sua máquina local pronto para aceitar conexões TCP enquanto desenvolvemos a API e o Worker nos próximos passos.
 
 ---
 
-## 🏗️ 1. Preparando a Estrutura de Diretórios
+## 🛠️ 1. Pré-requisitos & Instalação do Ambiente
 
-Antes de escrever qualquer código ou configuração Docker, crie a seguinte estrutura física de diretórios no seu espaço de trabalho. Ela reflete a separação estrita de escopos da nossa stack:
+Antes de prosseguir, você precisa garantir que possui o **Docker** (para orquestrar o Broker do RabbitMQ) e o **Python 3.12+** instalados na sua máquina. Abaixo está o guia específico para o seu Sistema Operacional:
+
+### 🐧 Para usuários Linux (Ubuntu/Debian)
+1. **Instalar Docker & Docker Compose**:
+   ```bash
+   sudo apt update
+   sudo apt install -y docker.io docker-compose-v2
+   ```
+2. **Configurar permissões sem root** (Crucial para não precisar usar `sudo` nos comandos docker):
+   ```bash
+   sudo usermod -aG docker $USER
+   newgrp docker
+   ```
+3. **Habilitar o serviço no startup**:
+   ```bash
+   sudo systemctl enable --now docker
+   ```
+4. **Instalar Python 3.12 & SQLite**:
+   ```bash
+   sudo apt install -y python3.12 python3-pip sqlite3 sqlitebrowser
+   ```
+
+### 🪟 Para usuários Windows
+1. **Instalar Docker**:
+   * Baixe e instale o [Docker Desktop para Windows](https://www.docker.com/products/docker-desktop/).
+   * **Recomendação**: Durante a instalação, marque a opção para habilitar o **WSL 2** (Windows Subsystem for Linux 2) para melhor performance e compatibilidade de rede.
+2. **Instalar Python 3.12+**:
+   * Baixe no site oficial ou instale via PowerShell com o gerenciador `winget`:
+     ```powershell
+     winget install -e --id Python.Python.3.12
+     ```
+3. **Instalar SQLite & Visualizador**:
+   * Instale o DB Browser para SQLite via `winget`:
+     ```powershell
+     winget install -e --id DBBrowserForSQLite.DBBrowserForSQLite
+     ```
+
+### 🍎 Para usuários macOS
+1. **Instalar Docker**:
+   * Baixe e instale o [Docker Desktop para Mac](https://www.docker.com/products/docker-desktop/) (escolha a versão correta: Apple Silicon para processadores M1/M2/M3 ou Intel).
+   * Ou instale via Homebrew:
+     ```bash
+     brew install --cask docker
+     ```
+2. **Instalar Python 3.12+**:
+   * Instale via Homebrew:
+     ```bash
+     brew install python@3.12
+     ```
+3. **Instalar SQLite & Visualizador**:
+   * Instale via Homebrew:
+     ```bash
+     brew install --cask db-browser-for-sqlite
+     ```
+
+---
+
+## 🏗️ 2. Preparando a Estrutura de Diretórios
+
+Crie a seguinte estrutura física de diretórios no seu espaço de trabalho. Ela reflete a separação estrita de camadas e responsabilidades da nossa stack:
 
 ```
 rabbitmq-stack/
@@ -27,7 +86,7 @@ rabbitmq-stack/
 
 ---
 
-## 🐳 2. O Docker Compose do Broker
+## 🐳 3. O Docker Compose do Broker
 
 Na raiz do seu workspace (`rabbitmq-stack/`), crie o arquivo `docker-compose.yml` focado em expor o RabbitMQ de maneira robusta para desenvolvimento local.
 
@@ -64,7 +123,7 @@ networks:
 
 ---
 
-## ⚡ 3. Subindo o Broker e Validando
+## ⚡ 4. Subindo o Broker e Validando
 
 Com a estrutura de pastas criada e o `docker-compose.yml` salvo, abra o seu terminal na raiz do projeto e execute:
 
@@ -81,10 +140,10 @@ Este comando fará o download da imagem leve baseada em Alpine e iniciará o con
 
 ---
 
-### 🧙‍♂️ Instruções do Mestre:
-Prepare a estrutura de diretórios e crie o `docker-compose.yml` inicial conforme as especificações. 
+### # 🧙‍♂️ Instruções do Mestre:
+Garanta que possui todos os pré-requisitos instalados em seu respectivo Sistema Operacional, prepare a estrutura de diretórios e crie o `docker-compose.yml` inicial conforme as especificações. 
 
 > [!IMPORTANT]
 > Quando a estrutura estiver montada e o RabbitMQ Broker estiver rodando localmente com status `(healthy)`, compartilhe comigo (o **Jedi da Mensageria** no chat) a árvore de diretórios que você criou e a confirmação de que acessou o painel de administração.
 > 
-> Como mentor, vou lhe auxiliar na estrutura inicial de pastas e conferir suas portas. **Após a sua validação, farei 2 a 3 perguntas reflexivas sobre redes no Docker e o papel do Healthcheck no Broker** antes de avançarmos o seu progresso para `33% - Passo 3/6: API Produtora FastAPI`.
+> Como seu mentor, vou lhe auxiliar na estrutura inicial de pastas, tirar dúvidas de instalação no seu SO e conferir suas conexões. **Após a sua validação, farei 2 a 3 perguntas reflexivas sobre redes no Docker e o papel do Healthcheck no Broker** antes de avançarmos o seu progresso para `33% - Passo 3/6: API Produtora FastAPI`.
