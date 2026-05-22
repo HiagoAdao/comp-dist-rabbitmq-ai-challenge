@@ -1,251 +1,398 @@
 # ⚙️ Passo 4/6: Worker Consumidor Pika (Conexão Local) & Resiliência AMQP
 
-Saudações, Padawan! A API produtora está rodando e publicando pedidos. Agora, nosso desafio é implementar o **worker-consumidor** de forma robusta e resiliente usando a biblioteca `Pika`.
+Saudações, Padawan! A API de pé e publicando mensagens na fila você já colocou. Orgulhoso do seu progresso eu estou, sim! Mas o fluxo completo da força da mensageria assíncrona apenas metade percorrido foi!
 
-O Worker deve operar seguindo regras rígidas de segurança contra perda de dados:
-1. **Fair Dispatch (`prefetch_count=1`)**: Não sobrecarregar um único worker, distribuindo mensagens de forma equilibrada em múltiplos consumidores em paralelo.
-2. **Acks e Nacks explícitos**: Confirmar mensagens (`basic_ack`) apenas quando processadas com sucesso. Em caso de erro não tratado, rejeitá-las explicitamente (`basic_nack(requeue=False)`) para que caiam automaticamente na Dead Letter Exchange (DLX).
+Neste passo, o **Worker Consumidor (`worker-consumidor`)** de forma robusta e altamente resiliente nós iremos construir. O Worker a retaguarda do nosso ecossistema representa: ele monitora a fila do RabbitMQ de forma constante, consome as mensagens, realiza o processamento em background de forma isolada, e grava o resultado de sucesso de forma definitiva no banco de dados local SQLite compartilhado.
+
+O nosso consumidor operará seguindo regras rígidas de segurança contra perda de dados:
+1. **Fair Dispatch (`prefetch_count=1`)**: Não sobrecarregar um único worker com muitas mensagens pendentes em memória nós devemos. A distribuição das mensagens equilibrada em múltiplos consumidores concorrentes em paralelo garantida será!
+2. **Acks e Nacks explícitos (`auto_ack=False`)**: Confirmar mensagens (`basic_ack`) apenas após o processamento bem-sucedido. Em caso de falha de desserialização ou erro de execução, rejeitá-las explicitamente (`basic_nack(requeue=False)`) para que a Dead Letter Exchange (DLX) o desvio para a fila de auditoria faça. Perda de mensagens na nossa stack tolerada não é!
 
 ---
 
 ## 🧠 1. Camada de Domínio (`worker/domain/`)
 
-O domínio do worker define a lógica de negócio do processamento assíncrono.
+Diferente da API (que lida com validações Web HTTP do Pydantic), no domínio do Worker utilizaremos entidades de negócio representadas por **`dataclasses`** imutáveis nativas do Python 3.12+ (`frozen=True`). Isso garante que as entidades não sofram mutações acidentais e sigam o padrão tático DDD puro.
 
 ### 📝 Entidade de Domínio (`worker/domain/models.py`)
-Utilizamos o Pydantic para modelar os dados do pedido consumido:
+Modelaremos o Pedido no worker de forma imutável.
+
+Crie o arquivo [worker/domain/models.py](file:///worker/domain/models.py) com o código abaixo:
 
 ```python
-from pydantic import BaseModel
+from dataclasses import dataclass
 
-class PedidoConsumido(BaseModel):
+
+@dataclass(frozen=True)
+class Pedido:
     id: str
     descricao: str
     valor: float
+    status: str
 ```
 
-### 📝 Contrato do Repositório (`worker/domain/repository.py`)
-Define a interface para persistir o resultado final do processamento:
+### 📝 Contrato do Repositório de Persistência (`worker/domain/repository.py`)
+O repositório do worker é responsável por persistir o estado do pedido (inclusive atualizando-o para `"processado"` no banco local SQLite).
+
+Crie o arquivo [worker/domain/repository.py](file:///worker/domain/repository.py) com o seguinte código:
 
 ```python
-from abc import ABC, abstractmethod
-from worker.domain.models import PedidoConsumido
+from pathlib import Path
 
-class PedidoProcessadoRepository(ABC):
-    @abstractmethod
-    def salvar_processado(self, pedido: PedidoConsumido) -> None:
-        """Persiste um pedido com status de processamento final."""
-        pass
+from worker.domain.models import Pedido
+from worker.infra.database import db_session, run_migrations
+
+_INSERT = (
+    "INSERT OR REPLACE INTO pedidos (id, descricao, valor, status, processado_em) "
+    "VALUES (?, ?, ?, ?, datetime('now'))"
+)
+_SELECT_ALL = (
+    "SELECT id, descricao, valor, status FROM pedidos ORDER BY processado_em DESC"
+)
+
+
+def _row_to_pedido(row: object) -> Pedido:
+    return Pedido(
+        id=row["id"],  # type: ignore[index]
+        descricao=row["descricao"],  # type: ignore[index]
+        valor=row["valor"],  # type: ignore[index]
+        status=row["status"],  # type: ignore[index]
+    )
+
+
+class PedidoRepository:
+    def __init__(self, db_path: Path) -> None:
+        self._db_path = db_path
+        run_migrations(db_path)
+
+    def save(self, pedido: Pedido) -> None:
+        with db_session(self._db_path) as conn:
+            conn.execute(
+                _INSERT,
+                (pedido.id, pedido.descricao, pedido.valor, pedido.status),
+            )
+
+    def get_all(self) -> list[Pedido]:
+        with db_session(self._db_path) as conn:
+            rows = conn.execute(_SELECT_ALL).fetchall()
+        return [_row_to_pedido(r) for r in rows]
 ```
 
-### 📝 Handler de Negócio (`worker/domain/handler.py`)
-O caso de uso principal do Worker. Ele contém a lógica de processamento e a regra de negócio do domínio:
+### 📝 Handler de Domínio (`worker/domain/handler.py`)
+Implementa o caso de uso de processamento do pedido. Como a entidade `Pedido` é imutável (`frozen=True`), utilizaremos a função `replace` da biblioteca padrão para criar um novo objeto com status modificado de forma segura.
+
+Crie o arquivo [worker/domain/handler.py](file:///worker/domain/handler.py) com o código abaixo:
 
 ```python
 import logging
-from worker.domain.models import PedidoConsumido
-from worker.domain.repository import PedidoProcessadoRepository
+import time
+from dataclasses import replace
+from typing import Protocol
+
+from worker.domain.models import Pedido
+from worker.domain.repository import PedidoRepository
 
 logger = logging.getLogger(__name__)
 
-class ProcessarPedidoHandler:
-    def __init__(self, repo: PedidoProcessadoRepository):
-        self.repo = repo
 
-    def handle(self, pedido: PedidoConsumido) -> None:
-        logger.info(f"Iniciando processamento do pedido {pedido.id} — '{pedido.descricao}'")
-        
-        # Regra de negócio simulada: se a descrição for "item inválido",
-        # simulamos uma falha grave de domínio!
-        if pedido.descricao.lower() == "item inválido":
-            raise ValueError("Falha de validação do domínio: este item não é elegível para processamento!")
+class MessageHandler(Protocol):
+    def handle(self, pedido: Pedido) -> None: ...
 
-        # Grava o sucesso do processamento no repositório de infra
-        self.repo.salvar_processado(pedido)
-        logger.info(f"Pedido {pedido.id} processado com sucesso!")
+
+class PedidoHandler:
+    def __init__(self, repository: PedidoRepository) -> None:
+        self._repository = repository
+
+    def handle(self, pedido: Pedido) -> None:
+        logger.info(
+            "Iniciando processamento do pedido %s — %s", pedido.id, pedido.descricao
+        )
+        time.sleep(2)  # Simula um processamento pesado em background
+        processado = replace(pedido, status="processado")
+        self._repository.save(processado)
+        logger.info("Pedido %s processado com sucesso.", pedido.id)
 ```
 
 ---
 
 ## 🛠️ 2. Camada de Infraestrutura (`worker/infra/`)
 
-A infraestrutura é onde os drivers tecnológicos conectam as mensagens às regras do domínio.
+A camada de Infraestrutura abriga os adaptadores técnicos do banco SQLite, as configurações de ambiente e o loop de escuta resiliente do protocolo AMQP.
 
 ### 📝 Configurações de Ambiente (`worker/infra/settings.py`)
-O host padrão do broker é `localhost` (para desenvolvimento local), permitindo sobrescrita de ambiente em produção:
+Mapeia as variáveis do RabbitMQ e do SQLite de forma idêntica à API.
+
+Crie o arquivo [worker/infra/settings.py](file:///worker/infra/settings.py) com o código abaixo:
 
 ```python
-from pydantic_settings import BaseSettings
+from functools import lru_cache
+from pathlib import Path
 
-class Settings(BaseSettings):
-    RABBITMQ_HOST: str = "localhost"  # Default para desenvolvimento local
-    RABBITMQ_PORT: int = 5672
-    RABBITMQ_USER: str = "guest"
-    RABBITMQ_PASS: str = "guest"
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-    class Config:
-        env_file = ".env"
+
+class RabbitMQSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="RABBITMQ_")
+
+    host: str = "localhost"
+    port: int = 5672
+    user: str = "guest"
+    password: str = "guest"
+    db_path: Path = Field(default=Path("data/pedidos.db"), validation_alias="DB_PATH")
+
+
+@lru_cache
+def get_settings() -> RabbitMQSettings:
+    return RabbitMQSettings()
 ```
 
-### 📝 Persistência Local de Processamento (`worker/infra/database.py`)
-Grava os pedidos processados com sucesso pelo worker em um arquivo JSON específico na pasta compartilhada:
+### 📝 Gerenciador do Banco SQLite (`worker/infra/database.py`)
+Controlará o ciclo de vida das conexões no banco compartilhado localmente com a API.
+
+Crie o arquivo [worker/infra/database.py](file:///worker/infra/database.py) com o código abaixo:
 
 ```python
-import json
-import os
-from worker.domain.models import PedidoConsumido
-from worker.domain.repository import PedidoProcessadoRepository
+import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
+from pathlib import Path
 
-class PedidoProcessadoRepositoryLocal(PedidoProcessadoRepository):
-    def __init__(self, filepath: str = "data/pedidos_processados.json"):
-        self.filepath = filepath
-        os.makedirs(os.path.dirname(self.filepath), exist_ok=True)
-        if not os.path.exists(self.filepath):
-            with open(self.filepath, "w") as f:
-                json.dump([], f)
 
-    def salvar_processado(self, pedido: PedidoConsumido) -> None:
-        with open(self.filepath, "r+") as f:
-            data = json.load(f)
-            data.append({
-                "id": pedido.id,
-                "descricao": pedido.descricao,
-                "valor": pedido.valor,
-                "status": "PROCESSADO"
-            })
-            f.seek(0)
-            json.dump(data, f, indent=4)
-            f.truncate()
+def get_connection(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+@contextmanager
+def db_session(db_path: Path) -> Generator[sqlite3.Connection, None, None]:
+    conn = get_connection(db_path)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def run_migrations(db_path: Path) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with db_session(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pedidos (
+                id TEXT PRIMARY KEY,
+                descricao TEXT NOT NULL,
+                valor REAL NOT NULL,
+                status TEXT NOT NULL,
+                processado_em TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
 ```
 
-### 📝 Consumidor Pika Resiliente (`worker/infra/consumer.py`)
-Gerencia a conexão do consumidor do RabbitMQ garantindo ACKs e NACKs seguros no protocolo AMQP:
+### 📝 Topologia de Mensageria (`worker/infra/topology.py`)
+Garante de forma declarativa e resiliente a declaração idêntica da topologia AMQP na inicialização do worker.
+
+Crie o arquivo [worker/infra/topology.py](file:///worker/infra/topology.py) com o seguinte código:
+
+```python
+from pika.adapters.blocking_connection import BlockingChannel
+
+
+def setup_topology(channel: BlockingChannel) -> None:
+    channel.exchange_declare(
+        exchange="pedidos_exchange",
+        exchange_type="topic",
+        durable=True,
+    )
+
+    channel.exchange_declare(
+        exchange="dlx_exchange",
+        exchange_type="direct",
+        durable=True,
+    )
+
+    channel.queue_declare(queue="dlx_pedidos", durable=True)
+    channel.queue_bind(
+        queue="dlx_pedidos",
+        exchange="dlx_exchange",
+        routing_key="dlx_pedidos",
+    )
+
+    channel.queue_declare(
+        queue="pedidos_queue",
+        durable=True,
+        arguments={"x-dead-letter-exchange": "dlx_exchange"},
+    )
+
+    channel.queue_bind(
+        queue="pedidos_queue",
+        exchange="pedidos_exchange",
+        routing_key="pedidos.*",
+    )
+```
+
+### 📝 Consumidor Pika Resiliente com Backoff Exponencial (`worker/infra/consumer.py`)
+Implementa a lógica do consumidor Pika com retentativa exponencial em caso de queda de rede e callbacks explícitas para controle seguro de Acks e Nacks.
+
+Crie o arquivo [worker/infra/consumer.py](file:///worker/infra/consumer.py) com o código abaixo:
 
 ```python
 import json
 import logging
+import time
+
 import pika
-from worker.domain.models import PedidoConsumido
-from worker.domain.handler import ProcessarPedidoHandler
+from pika.adapters.blocking_connection import BlockingChannel
+from pika.spec import Basic
+
+from worker.domain.handler import MessageHandler
+from worker.domain.models import Pedido
+from worker.infra.settings import RabbitMQSettings
+from worker.infra.topology import setup_topology
+
+QUEUE_NAME: str = "pedidos_queue"
+PREFETCH_COUNT: int = 1
+
+MAX_RETRIES: int = 5
+BACKOFF_BASE_SECONDS: int = 2
 
 logger = logging.getLogger(__name__)
 
-class RabbitMQConsumer:
-    def __init__(self, connection_parameters: pika.ConnectionParameters, handler: ProcessarPedidoHandler):
-        self.params = connection_parameters
-        self.handler = handler
-        self.connection = None
-        self.channel = None
 
-    def iniciar(self) -> None:
-        self.connection = pika.BlockingConnection(self.params)
-        self.channel = self.connection.channel()
+def build_connection_params(settings: RabbitMQSettings) -> pika.ConnectionParameters:
+    return pika.ConnectionParameters(
+        host=settings.host,
+        port=settings.port,
+        credentials=pika.PlainCredentials(settings.user, settings.password),
+        heartbeat=60,
+        blocked_connection_timeout=300,
+    )
 
-        # 1. Configurar prefetch_count=1 (Fair Dispatch)
-        # Garante que o broker não envie uma nova mensagem a este worker até que ele
-        # envie o ACK correspondente da mensagem anterior.
-        self.channel.basic_qos(prefetch_count=1)
 
-        # 2. Registrar a Callback para consumo na fila
-        self.channel.basic_consume(
-            queue="pedidos_queue",
-            on_message_callback=self._callback,
-            auto_ack=False  # NUNCA use True em produção sob risco de perda de dados
-        )
-
-        logger.info("Worker inicializado com sucesso. Aguardando novos pedidos...")
-        self.channel.start_consuming()
-
-    def _callback(self, ch, method, properties, body):
+def connect_with_retry(params: pika.ConnectionParameters) -> pika.BlockingConnection:
+    for attempt in range(MAX_RETRIES):
         try:
-            # 1. Desserialização do payload
-            data = json.loads(body.decode())
-            pedido = PedidoConsumido(**data)
+            return pika.BlockingConnection(params)
+        except pika.exceptions.AMQPConnectionError:
+            wait: int = BACKOFF_BASE_SECONDS**attempt
+            logger.warning(
+                "RabbitMQ indisponível. Tentativa %d/%d. Aguardando %ds.",
+                attempt + 1,
+                MAX_RETRIES,
+                wait,
+            )
+            time.sleep(wait)
+    raise RuntimeError(
+        f"Não foi possível conectar ao RabbitMQ após {MAX_RETRIES} tentativas."
+    )
 
-            # 2. Executa o caso de uso no Handler de Domínio
-            self.handler.handle(pedido)
 
-            # 3. Sucesso! Envia basic_ack de confirmação definitiva
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            logger.info(f"ACK enviado para o pedido {pedido.id}.")
-            
-        except Exception as e:
-            logger.error(f"Falha de processamento no Worker: {str(e)}")
-            # 4. Rejeição! Envia basic_nack com requeue=False.
-            # O RabbitMQ removerá a mensagem da fila principal e a encaminhará
-            # automaticamente para a DLX (dlx_pedidos) para auditoria.
-            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-            logger.warning(f"NACK enviado para a mensagem. Redirecionada para DLX.")
+def process_message(
+    handler: MessageHandler,
+    ch: BlockingChannel,
+    method: Basic.Deliver,
+    body: bytes,
+) -> None:
+    try:
+        dados = json.loads(body)
+        pedido = Pedido(**dados)
+        handler.handle(pedido)
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+    except (json.JSONDecodeError, pika.exceptions.AMQPError) as exc:
+        logger.error("Erro ao processar mensagem: %s", exc, exc_info=True)
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+
+
+def start_consuming(handler: MessageHandler, settings: RabbitMQSettings) -> None:
+    params = build_connection_params(settings)
+    connection = connect_with_retry(params)
+    channel = connection.channel()
+
+    setup_topology(channel)
+    channel.basic_qos(prefetch_count=PREFETCH_COUNT)
+
+    channel.basic_consume(
+        queue=QUEUE_NAME,
+        on_message_callback=lambda ch, method, properties, body: process_message(
+            handler, ch, method, body
+        ),
+    )
+
+    logger.info("Worker inicializado. Aguardando mensagens...")
+    channel.start_consuming()
 ```
 
 ---
 
 ## ⚡ 3. Arquivo de Entrada (`worker/main.py`)
 
-No ponto de inicialização, orquestramos a montagem unindo a Infraestrutura aos Contratos de Domínio:
+No ponto de entrada do Worker, configuramos os logs globais estruturados e instanciamos as dependências concretas ligadas às regras abstratas de negócio.
+
+Crie o arquivo [worker/main.py](file:///worker/main.py) com o seguinte código:
 
 ```python
 import logging
-import pika
-from worker.infra.settings import Settings
-from worker.infra.database import PedidoProcessadoRepositoryLocal
-from worker.domain.handler import ProcessarPedidoHandler
-from worker.infra.consumer import RabbitMQConsumer
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from worker.domain.handler import PedidoHandler
+from worker.domain.repository import PedidoRepository
+from worker.infra.consumer import start_consuming
+from worker.infra.settings import get_settings
 
-settings = Settings()
-
-def main():
-    repo = PedidoProcessadoRepositoryLocal()
-    handler = ProcessarPedidoHandler(repo)
-    
-    credentials = pika.PlainCredentials(settings.RABBITMQ_USER, settings.RABBITMQ_PASS)
-    parameters = pika.ConnectionParameters(
-        host=settings.RABBITMQ_HOST,
-        port=settings.RABBITMQ_PORT,
-        credentials=credentials
-    )
-    
-    consumer = RabbitMQConsumer(parameters, handler)
-    try:
-        consumer.iniciar()
-    except KeyboardInterrupt:
-        logger.info("Encerrando o worker graciosamente...")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 if __name__ == "__main__":
-    main()
+    try:
+        settings = get_settings()
+        repository = PedidoRepository(db_path=settings.db_path)
+        start_consuming(handler=PedidoHandler(repository), settings=settings)
+    except KeyboardInterrupt:
+        logging.getLogger(__name__).info("Worker encerrado pelo usuário.")
 ```
 
 ---
 
 ## 🚀 4. Executando e validando o Fluxo de Ponta a Ponta
 
-1. Crie o arquivo `requirements.txt` na pasta `worker/` contendo:
-   ```text
-   pika>=1.3.2
-   pydantic>=2.6.0
-   pydantic-settings>=2.2.0
-   ```
-2. Instale as dependências localmente.
-3. Abra um terminal para rodar a API (Passo 3): `uvicorn main:app --reload` (em `api/`).
-4. Abra outro terminal e inicie o Worker (em `worker/`):
+1. Abra um terminal na raiz do seu workspace e inicie a API produtora:
    ```bash
-   python main.py
+   uv run task api-dev
    ```
-5. **Cenário de Sucesso**: Envie um pedido válido via `curl` na API:
-   * Verifique o log do Worker: ele deve logar o recebimento, gravar o sucesso em `worker/data/pedidos_processados.json` e emitir o **ACK** no RabbitMQ.
-6. **Cenário de Falha (DLX)**: Envie um pedido com a descrição `"item inválido"`:
-   * O Worker tentará processar, disparará a exceção do domínio, capturará o erro na infraestrutura, emitirá o **NACK** com `requeue=False` e a mensagem sumirá da fila principal.
-   * Verifique no painel do RabbitMQ (`http://localhost:15672`) que a fila `dlx_pedidos` agora possui **1 mensagem** nela!
+2. Abra um segundo terminal e inicie o Worker de forma local utilizando a inicialização de módulo Python do `uv`:
+   ```bash
+   uv run python -m worker.main
+   ```
+3. **Cenário de Sucesso**: Em uma nova janela de terminal, envie um pedido válido via requisição POST HTTP:
+   ```bash
+   curl -X POST "http://localhost:8000/pedidos/" \
+        -H "Content-Type: application/json" \
+        -d '{"id": "ped-ok", "descricao": "Espada de Treino Jedi", "valor": 150.0}'
+   ```
+   * Verifique o log do Worker: ele deve registrar o início do processamento pesado (2 segundos), o salvamento no SQLite com status `"processado"`, e o envio do ACK.
+   * Verifique na API consultando o endpoint `GET /pedidos/` (`curl http://localhost:8000/pedidos/`). O pedido com status `"processado"` listado deve ser!
+4. **Cenário de Falha (DLX)**: Envie uma mensagem com payload JSON malformatado ou incompleto diretamente via RabbitMQ Management, ou altere temporariamente os tipos de entrada para forçar uma exceção de desserialização no Worker.
+   * Verifique o log do Worker: ele capturará a exceção, enviará o `basic_nack(requeue=False)` de forma explícita, e a mensagem direcionada para a Dead Letter Exchange (`dlx_exchange`) automaticamente será!
+   * No painel do RabbitMQ, comprove que a fila `dlx_pedidos` possui **1 mensagem** aguardando auditoria.
 
 ---
 
-### 🧙‍♂️ Instruções do Mestre:
-Escreva a infraestrutura do seu Worker, configure as callbacks para gerenciar o ciclo AMQP localmente e teste ambos os cenários (sucesso e falha).
+## 🧙‍♂️ Instruções do Mestre:
+
+Pronto o seu Worker Consumidor Pika local e processando mensagens estar deve, jovem Padawan! O código das suas camadas de Domínio e Infraestrutura e a persistência compartilhada rodando apresentar você precisa!
+
+O log de processamento de 2 segundos com o ACK de sucesso e a mensagem rejeitada na fila do `dlx_pedidos` no painel administrativo você comprovar deve para mim no chat!
 
 > [!IMPORTANT]
-> Quando o seu cenário de sucesso gerar o arquivo `pedidos_processados.json` e o cenário de falha enviar a mensagem para a fila do `dlx_pedidos` no broker, compartilhe os códigos e logs comigo.
+> **Fluxo de Aprovação e Aprendizado**:
+> Primeiro, a árvore física dos arquivos criados e a saída de sucesso/falha do terminal do Worker eu irei inspecionar.
+> Após a sua demonstração prática impecável, perguntas reflexivas sobre os perigos do ACK automático (`auto_ack=True`) e de loops infinitos causados por NACK com re-enfileiramento (`requeue=True`) sem tratamento de falhas eu farei.
 > 
-> Como mentor, vou analisar a sua captura de exceções e a robustez do loop. **Após validarmos o código, farei 2 a 3 perguntas reflexivas sobre o perigo do loop infinito de NACK com requeue=True e a importância de auto_ack=False** antes de avançarmos seu progresso para `66% - Passo 5/6: Testes Automatizados`.
+> A sua compreensão lógica demonstrar você deve! Apenas após as respostas corretas estarem fornecidas, o sinal verde para o **Passo 5/6: Testes Automatizados** aceso será! Que a Força o acompanhe na escrita desse código!
