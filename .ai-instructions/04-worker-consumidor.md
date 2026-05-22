@@ -38,6 +38,7 @@ Crie o arquivo [worker/domain/repository.py](file:///worker/domain/repository.py
 
 ```python
 from pathlib import Path
+from typing import Any
 
 from worker.domain.models import Pedido
 from worker.infra.database import db_session, run_migrations
@@ -51,12 +52,12 @@ _SELECT_ALL = (
 )
 
 
-def _row_to_pedido(row: object) -> Pedido:
+def _row_to_pedido(row: Any) -> Pedido:
     return Pedido(
-        id=row["id"],  # type: ignore[index]
-        descricao=row["descricao"],  # type: ignore[index]
-        valor=row["valor"],  # type: ignore[index]
-        status=row["status"],  # type: ignore[index]
+        id=row["id"],
+        descricao=row["descricao"],
+        valor=row["valor"],
+        status=row["status"],
     )
 
 

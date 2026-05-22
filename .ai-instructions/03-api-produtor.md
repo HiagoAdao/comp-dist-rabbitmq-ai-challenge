@@ -47,6 +47,7 @@ Crie o arquivo [api/domain/repository.py](file:///api/domain/repository.py) com 
 
 ```python
 from pathlib import Path
+from typing import Any
 
 from api.domain.models import Pedido
 from api.infra.database import db_session, run_migrations
@@ -57,12 +58,12 @@ _SELECT_ALL = (
 _SELECT_BY_ID = "SELECT id, descricao, valor, status FROM pedidos WHERE id = ?"
 
 
-def _row_to_pedido(row: object) -> Pedido:
+def _row_to_pedido(row: Any) -> Pedido:
     return Pedido(
-        id=row["id"],  # type: ignore[index]
-        descricao=row["descricao"],  # type: ignore[index]
-        valor=row["valor"],  # type: ignore[index]
-        status=row["status"],  # type: ignore[index]
+        id=row["id"],
+        descricao=row["descricao"],
+        valor=row["valor"],
+        status=row["status"],
     )
 
 
